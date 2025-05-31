@@ -4,7 +4,8 @@ import xgboost as xgb
 from sklearn.preprocessing import LabelEncoder
 
 # ---------- 讀取資料與訓練模型 ----------
-df = pd.read_csv("C:/Users/a0987/Downloads/china_cancer_patients_synthetic.csv")
+df = pd.read_csv("china_cancer_patients_synthetic.csv")
+
 target_col = "SurvivalStatus"
 df[target_col] = df[target_col].map({'Alive': 0, 'Deceased': 1})
 
