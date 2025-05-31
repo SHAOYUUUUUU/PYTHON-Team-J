@@ -1,9 +1,10 @@
 import streamlit as st
 import pandas as pd
-import pickle
+import numpy as np
 import shap
+import pickle
 
-# ---------- 載入模型與設定 ----------
+# ====== 載入模型與參數 ======
 with open("model.pkl", "rb") as f:
     model = pickle.load(f)
 
@@ -13,74 +14,76 @@ with open("top10_features.pkl", "rb") as f:
 with open("optimal_threshold.pkl", "rb") as f:
     optimal_threshold = pickle.load(f)
 
-with open("all_features.pkl", "rb") as f:
-    all_features = pickle.load(f)
+# ====== 建立使用者輸入介面 ======
+st.title("🔍 癌症死亡風險預測")
+st.write("請填寫以下欄位以進行預測：")
 
-# ---------- Streamlit UI ----------
-st.title("🩺 亮瑜醫院癌症死亡風險預測")
-st.write("請填寫以下資訊，系統將預測病患死亡風險並提供臨床建議")
-
-# ---------- 使用者輸入 ----------
 user_input = {}
-user_input['CancerStage'] = st.number_input("癌症期數（例：1～4）", min_value=1, max_value=4, step=1) - 1
-user_input['TumorSize'] = st.number_input("腫瘤大小（單位：cm）", min_value=0.0, step=0.1)
-user_input['Metastasis'] = st.number_input("是否轉移？（是=1，否=0）", min_value=0, max_value=1, step=1)
-user_input['Age'] = st.number_input("年齡", min_value=0, step=1)
-user_input['FollowUpMonths'] = st.number_input("追蹤月數", min_value=0, step=1)
-user_input['DaysToSurgery'] = st.number_input("從診斷到手術的天數", min_value=0, step=1)
-user_input['ChemotherapySessions'] = st.number_input("化療次數", min_value=0, step=1)
-user_input['SmokingStatus'] = st.number_input("是否吸菸？（是=2，曾經=1，否=0）", min_value=0, max_value=2, step=1)
-user_input['RadiationSessions'] = st.number_input("放療次數", min_value=0, step=1)
-user_input['AlcoholUse'] = st.number_input("是否喝酒？（時常=2，偶爾=1，否=0）", min_value=0, max_value=2, step=1)
+user_input['AlcoholUse'] = st.selectbox("飲酒習慣", ["Never", "Occasional", "Heavy"])
+user_input['SmokingStatus'] = st.selectbox("抽菸狀況", ["Never", "Former", "Current"])
+user_input['CancerStage'] = st.selectbox("癌症期別", ["Stage I", "Stage II", "Stage III", "Stage IV"])
+user_input['Metastasis=Yes'] = st.selectbox("是否有轉移", ["Yes", "No"]) == "Yes"
+user_input['DaysToSurgery'] = st.number_input("診斷到手術的天數", min_value=0, max_value=500, value=30)
+user_input['HasComorbidity'] = st.selectbox("是否有共病", ["是", "否"]) == "是"
+user_input['Age'] = st.number_input("年齡", min_value=18, max_value=120, value=60)
+user_input['BMI'] = st.number_input("BMI 指數", min_value=10.0, max_value=50.0, value=22.0)
+user_input['BloodPressure'] = st.number_input("血壓", min_value=80, max_value=200, value=120)
+user_input['Cholesterol'] = st.number_input("膽固醇", min_value=100, max_value=300, value=180)
 
-# ---------- 預測 ----------
-if st.button("🔍 預測死亡風險"):
-    X_new = pd.DataFrame([user_input])[top10_features]
-    X_new = X_new.reindex(columns=all_features, fill_value=0)
-    y_proba = model.predict_proba(X_new)[0][1]
+if st.button("🚀 預測死亡風險"):
+    # ====== 轉換為 DataFrame 並處理欄位 ======
+    X_user = pd.DataFrame([user_input])
+
+    label_maps = {
+        "AlcoholUse": {"Never": 2, "Occasional": 1, "Heavy": 0},
+        "SmokingStatus": {"Never": 0, "Former": 1, "Current": 2},
+        "CancerStage": {"Stage I": 0, "Stage II": 1, "Stage III": 2, "Stage IV": 3},
+    }
+
+    for col, mapping in label_maps.items():
+        if col in X_user.columns:
+            X_user[col] = X_user[col].map(mapping)
+
+    X_user['Metastasis=Yes'] = X_user['Metastasis=Yes'].astype(int)
+    X_user['HasComorbidity'] = X_user['HasComorbidity'].astype(int)
+
+    for col in top10_features:
+        if col not in X_user.columns:
+            X_user[col] = 0
+    X_user = X_user[top10_features]
+
+    # ====== 預測與 SHAP 分析 ======
+    y_proba = model.predict_proba(X_user)[:, 1][0]
     y_pred = int(y_proba >= optimal_threshold)
 
-    # 風險等級
-    if y_proba <= 0.2:
-        risk_level = "低風險"
-        risk_level_full = "低風險，安啦安啦"
-        risk_emoji = "🟩"
-    elif y_proba <= 0.5:
-        risk_level = "中風險"
-        risk_level_full = "中風險，要小心喔老哥"
-        risk_emoji = "🟨"
-    else:
-        risk_level = "高風險"
-        risk_level_full = "高風險，沒救了啦，下輩子好好做人"
-        risk_emoji = "🟥"
-
-    # 顯示預測結果
-    st.subheader("📊 預測結果")
-    st.write(f"死亡機率：**{y_proba*100:.1f}%**")
-    st.write(f"預測結果：{risk_emoji} **{'死亡' if y_pred else '存活'}**（閾值={optimal_threshold:.2f}）")
-
-    # SHAP 解釋（前三大風險因素）
     explainer = shap.Explainer(model)
-    shap_values = explainer(X_new)
+    shap_values = explainer(X_user)
 
     shap_df = pd.DataFrame({
         '特徵': top10_features,
-        '數值': X_new[top10_features].values[0],
+        '數值': X_user.values[0],
         '影響力': shap_values.values[0]
     }).sort_values('影響力', key=abs, ascending=False)
 
-    top_3 = shap_df.head(3).to_dict('records')
-    st.subheader("💡 主要風險因素（前3名）")
-    for item in top_3:
-        direction = "↑ 增加風險" if item['影響力'] > 0 else "↓ 降低風險"
-        st.write(f"- `{item['特徵']}`：{item['數值']}（{direction}）")
+    top_3_factors = shap_df.head(3)
 
-    # 臨床建議
-    advice = {
-        '低風險': "✅ 常規隨訪（每6個月一次）",
-        '中風險': "⚠️ 建議加強隨訪（每2個月一次）",
-        '高風險': "🚨 立即住院治療並啟動多學科會診"
-    }
+    # ====== 顯示結果 ======
+    st.subheader("📊 預測結果")
+    st.write(f"死亡概率: **{y_proba*100:.1f}%**")
+    st.write(f"預測結果: {'🟥 高風險(死亡)' if y_pred else '🟩 低風險(存活)'} (閾值 = {optimal_threshold:.2f})")
+
+    st.subheader("💡 主要風險因素")
+    for _, row in top_3_factors.iterrows():
+        direction = "↑ 增加" if row['影響力'] > 0 else "↓ 減少"
+        st.write(f"- {row['特徵']}: {row['數值']} ({direction}風險)")
+
+    # ====== 臨床建議 ======
+    if y_proba <= 0.2:
+        advice = "常規隨訪（每6個月一次）"
+    elif y_proba <= 0.5:
+        advice = "加強隨訪（每2個月一次）"
+    else:
+        advice = "🔺 建議立即住院並啟動多學科會診"
 
     st.subheader("🏥 臨床建議")
-    st.write(f"{risk_level_full}：{advice[risk_level]}")
+    st.write(advice)
