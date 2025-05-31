@@ -2,57 +2,80 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import pickle
-import xgboost as xgb
+import shap
 
-# 載入模型
+# 載入模型與資訊
 with open("model.pkl", "rb") as f:
     model = pickle.load(f)
-
+with open("top10_features.pkl", "rb") as f:
+    top10_features = pickle.load(f)
 with open("optimal_threshold.pkl", "rb") as f:
     optimal_threshold = pickle.load(f)
+with open("all_features.pkl", "rb") as f:
+    all_features = pickle.load(f)
 
-# 直接定義 top10 特徵
-# 依照你的設計，用戶只會輸入這 10 個特徵
-
-TOP10_FEATURES = [
-    'CancerStage', 'TumorSize', 'Metastasis', 'Age', 'FollowUpMonths',
-    'DaysToSurgery', 'ChemotherapySessions', 'SmokingStatus', 'RadiationSessions', 'AlcoholUse'
-]
-
-st.set_page_config(page_title="癌症預測模型 App")
-st.title("癌症死亡預測 + 臨牀建議")
-
-# 用戶輸入區塊
-st.header("請輸入用戶健康資料")
+# -------- Streamlit UI --------
+st.title("🧬 癌症預後預測工具")
+st.subheader("請輸入以下臨床資訊：")
 
 user_input = {}
-user_input['CancerStage'] = st.slider("癌症期數", 1, 4, 2) - 1
-user_input['TumorSize'] = st.number_input("腫瘤大小 (cm)", min_value=0.0)
-user_input['Metastasis'] = st.selectbox("是否轉移", [0, 1], format_func=lambda x: "否" if x == 0 else "是")
-user_input['Age'] = st.number_input("年齡", min_value=0)
-user_input['FollowUpMonths'] = st.number_input("追蹤月數", min_value=0)
-user_input['DaysToSurgery'] = st.number_input("診斷到手術的天數", min_value=0)
-user_input['ChemotherapySessions'] = st.number_input("化療次數", min_value=0)
-user_input['SmokingStatus'] = st.selectbox("吸菸情況", [0, 1, 2], format_func=lambda x: ["否", "曾經", "是"][x])
-user_input['RadiationSessions'] = st.number_input("放療次數", min_value=0)
-user_input['AlcoholUse'] = st.selectbox("飲酒情況", [0, 1, 2], format_func=lambda x: ["否", "偶爾", "時常"][x])
+user_input['CancerStage'] = st.number_input("癌症期數（1~4）", min_value=1, max_value=4, value=2) - 1
+user_input['TumorSize'] = st.number_input("腫瘤大小（單位：cm）", value=3.0)
+user_input['Metastasis'] = st.radio("是否轉移？", options=[0, 1], format_func=lambda x: "否" if x == 0 else "是")
+user_input['Age'] = st.number_input("年齡", min_value=1, max_value=120, value=55)
+user_input['FollowUpMonths'] = st.number_input("追蹤月數", value=24)
+user_input['DaysToSurgery'] = st.number_input("從診斷到手術的天數", value=30)
+user_input['ChemotherapySessions'] = st.number_input("化療次數", value=5)
+user_input['SmokingStatus'] = st.radio("是否吸菸？", options=[0, 1, 2], format_func=lambda x: ["否", "曾經", "是"][x])
+user_input['RadiationSessions'] = st.number_input("放療次數", value=4)
+user_input['AlcoholUse'] = st.radio("是否喝酒？", options=[0, 1, 2], format_func=lambda x: ["否", "偶爾", "時常"][x])
 
-# 正式預測結果
-if st.button("執行預測"):
-    X_new = pd.DataFrame([user_input])[TOP10_FEATURES]
-    y_proba = model.predict_proba(X_new)[:, 1]
-    y_pred = int(y_proba[0] >= optimal_threshold)
+# -------- 資料處理 --------
+X_new = pd.DataFrame([[user_input.get(col, 0) for col in all_features]], columns=all_features)
 
-    st.subheader("預測結果")
-    st.write(f"死亡概率: {y_proba[0]:.2f}")
-    st.write("預測結論：", "😓 高風險 (預測為死亡)" if y_pred == 1 else "😊 低風險 (預測為存活)")
+# -------- 預測 --------
+y_proba = model.predict_proba(X_new)[:, 1][0]
+y_pred = int(y_proba >= optimal_threshold)
 
-    st.subheader("臨牀建議")
-    if y_pred == 1:
-        st.markdown("""
-        請評估患者化療、放療不良反應，增加追蹤風險與命題討論
-        """)
-    else:
-        st.markdown("""
-        繼續追蹤患者健康狀況，檢視腹空、水血指標以及學習專科資訊
-        """)
+# ---------- SHAP 解釋 ----------
+explainer = shap.Explainer(model)
+shap_values = explainer(X_new)
+
+shap_df = pd.DataFrame({
+    '特徵': all_features,
+    '數值': X_new.values[0],
+    '影響力': shap_values.values[0]
+}).sort_values('影響力', key=abs, ascending=False)
+
+top_3_factors = shap_df.head(3).to_dict('records')
+
+# ---------- 風險分級 ----------
+if y_proba <= 0.2:
+    risk_level = "低風險"
+    risk_emoji = "🟩"
+elif y_proba <= 0.5:
+    risk_level = "中風險"
+    risk_emoji = "🟨"
+else:
+    risk_level = "高風險"
+    risk_emoji = "🟥"
+
+# ---------- 結果展示 ----------
+st.markdown("---")
+st.subheader("📊 預測結果")
+st.write(f"死亡機率：**{y_proba*100:.1f}%**")
+st.write(f"預測結果：{risk_emoji} **{'死亡' if y_pred else '存活'}** (閾值={optimal_threshold:.2f})")
+
+st.subheader("💡 主要風險因素")
+for factor in top_3_factors:
+    direction = "↑ 增加風險" if factor['影響力'] > 0 else "↓ 降低風險"
+    st.write(f"- {factor['特徵']}: {factor['數值']} ({direction})")
+
+# ---------- 臨床建議 ----------
+clinical_advice = {
+    '低風險': "✅ 常規隨訪（每6個月一次）",
+    '中風險': "⚠️ 建議加強隨訪（每2個月一次）",
+    '高風險': "🚨 立即住院治療並啟動多學科會診"
+}
+st.subheader("🏥 臨床建議")
+st.write(clinical_advice[risk_level])
