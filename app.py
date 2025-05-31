@@ -3,6 +3,8 @@ import pandas as pd
 import numpy as np
 import pickle
 import shap
+from PIL import Image
+
 
 # ---------- 載入模型與特徵 ----------
 with open("model.pkl", "rb") as f:
