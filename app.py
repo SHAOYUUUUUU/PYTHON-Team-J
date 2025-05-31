@@ -15,8 +15,9 @@ with open("all_features.pkl", "rb") as f:
     all_features = pickle.load(f)
 
 st.set_page_config(page_title="癌症死亡風險預測", layout="centered")
-st.title("🧬 癌症死亡風險預測工具")
-st.markdown("請輸入病患的臨床資訊，我們將預測其未來死亡的機率，並提供建議。")
+header_image = Image.open("header_image.png")
+st.title("🧬 癌症死亡風險預測系統")
+st.markdown("請輸入病患的臨床資訊，我們將預測您未來死亡，請謹慎使用。")
 
 # ---------- 使用者輸入 ----------
 with st.form("prediction_form"):
